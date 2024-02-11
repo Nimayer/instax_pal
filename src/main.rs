@@ -1,64 +1,64 @@
-use bluez_async::{BluetoothEvent, BluetoothSession, CharacteristicEvent};
-use futures::stream::StreamExt;
+use std::error::Error;
 use std::time::Duration;
-use tokio::time;
-use uuid::Uuid;
+use bluest::{Adapter, Uuid, pairing::NoInputOutputPairingAgent};
+use futures_lite::{StreamExt};
 use instax_pal::*;
 
 // UART-like GATT service
-// Commands are sent to WRITE_UUID characteristic
-// Responses are read from NOTIFY_UUID characteristic
+// Commands are sent to INSTAX_WRITE_UUID characteristic
+// Responses are read from INSTAX_NOTIFY_UUID characteristic
 // Reference: https://github.com/jpwsutton/instax_api/issues/21#issuecomment-770462168
-const SERVICE_UUID: Uuid = Uuid::from_u128(0x70954782_2d83_473d_9e5f_81e1d02d5273);
-const WRITE_UUID: Uuid = Uuid::from_u128(0x70954783_2d83_473d_9e5f_81e1d02d5273);
-const NOTIFY_UUID: Uuid = Uuid::from_u128(0x70954784_2d83_473d_9e5f_81e1d02d5273);
+const INSTAX_SERVICE_UUID: Uuid = Uuid::from_u128(0x70954782_2d83_473d_9e5f_81e1d02d5273);
+const INSTAX_WRITE_UUID: Uuid = Uuid::from_u128(0x70954783_2d83_473d_9e5f_81e1d02d5273);
+const INSTAX_NOTIFY_UUID: Uuid = Uuid::from_u128(0x70954784_2d83_473d_9e5f_81e1d02d5273);
 
 #[tokio::main]
-async fn main() -> Result<(), eyre::Report> {
-    pretty_env_logger::init();
-    // Create a new session. This establishes the D-Bus connection to talk to BlueZ. In this case we
-    // ignore the join handle, as we don't intend to run indefinitely.
-    let (_, session) = BluetoothSession::new().await?;
-    // Start scanning for Bluetooth devices, and wait a few seconds for some to be discovered.
-    session.start_discovery().await?;
-    time::sleep(Duration::from_secs(5)).await;
-    session.stop_discovery().await?;
-    let devices = session.get_devices().await?;
-    let device = devices
-        .into_iter()
-        .filter(|device| device.name.is_some())
-        .find(|device| device.name.as_ref().unwrap().starts_with("INSTAX-") && device.name.as_ref().unwrap().ends_with("(IOS)"))
-        .unwrap();
-    println!("Instax camera found: {}", &device.name.unwrap());
-    session.connect(&device.id).await?;
-    println!("Connected!");
-    let service = session
-        .get_service_by_uuid(
-            &device.id,
-            SERVICE_UUID,
-        )
-        .await?;
-    let notify_characteristic = session.get_characteristic_by_uuid(&service.id, NOTIFY_UUID).await?;
-    // Subscribe to notifications on the characteristic and print them out.
-    let mut events = session.characteristic_event_stream(&notify_characteristic.id).await?;
-    session.start_notify(&notify_characteristic.id).await?;
-    let write_characteristic = session.get_characteristic_by_uuid(&service.id, WRITE_UUID).await?;
+async fn main() -> Result<(), Box<dyn Error>> {
+    let adapter = Adapter::default().await.ok_or("Bluetooth adapter not found")?;
+    adapter.wait_available().await?;
+    println!("Searching Instax device");
+    let device = adapter
+        .discover_devices(&[INSTAX_SERVICE_UUID])
+        .await?
+        .next()
+        .await
+        .ok_or("Failed to discover device")??;
+    println!(
+        "found device: {} ({:?})",
+        device.name().as_deref().unwrap_or("(unknown)"),
+        device.id()
+    );
+    // HACK: on some laptops we need to repeat pairing, otherwise we can't connect
+    if device.is_paired().await? {
+        println!("Repeating device pairing");
+        device.unpair().await?
+    }
+    device.pair_with_agent(&NoInputOutputPairingAgent).await?;
+    adapter.connect_device(&device).await?;
+    println!("connected!");
+    let service = match device
+        .discover_services_with_uuid(INSTAX_SERVICE_UUID)
+        .await?
+        .get(0)
+    {
+        Some(service) => service.clone(),
+        None => return Err("Service not found".into()),
+    };
+    let characteristics = service.characteristics().await?;
+    let write_characteristic = characteristics
+        .iter()
+        .find(|x| x.uuid() == INSTAX_WRITE_UUID)
+        .ok_or("write characteristic not found")?;
+    let notify_characteristic = characteristics
+        .iter()
+        .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
+        .ok_or("notify characteristic not found")?;
     let packet = prepare_packet(instax_pal::SUPPORT_FUNCTION_INFO, instax_pal::SupportFunctionInfoType::BATTERY_INFO as u8);
     dbg!(&packet);
-    let response = session.write_characteristic_value(&write_characteristic.id, packet).await?;
-    println!("Packet sent!");
-    dbg!(response);
-    println!("Waiting for notifications");
-    while let Some(event) = events.next().await {
-        if let BluetoothEvent::Characteristic {
-            id,
-            event: CharacteristicEvent::Value { value },
-        } = event
-        {
-            println!("Update from {}: {:?}", id, value);
-        } else {
-            println!("Other event {:?}", event)
-        }
+    write_characteristic.write(&packet).await?;
+    let mut updates = notify_characteristic.notify().await?;
+    while let Some(val) = updates.next().await {
+        println!("Message: {:?}", val?);
     }
     Ok(())
 }
