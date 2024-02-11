@@ -1,8 +1,8 @@
+use bluest::{pairing::NoInputOutputPairingAgent, Adapter, Uuid};
+use futures_lite::StreamExt;
+use instax_pal::*;
 use std::error::Error;
 use std::time::Duration;
-use bluest::{Adapter, Uuid, pairing::NoInputOutputPairingAgent};
-use futures_lite::{StreamExt};
-use instax_pal::*;
 
 // UART-like GATT service
 // Commands are sent to INSTAX_WRITE_UUID characteristic
@@ -14,7 +14,9 @@ const INSTAX_NOTIFY_UUID: Uuid = Uuid::from_u128(0x70954784_2d83_473d_9e5f_81e1d
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let adapter = Adapter::default().await.ok_or("Bluetooth adapter not found")?;
+    let adapter = Adapter::default()
+        .await
+        .ok_or("Bluetooth adapter not found")?;
     adapter.wait_available().await?;
     println!("Searching Instax device");
     let device = adapter
@@ -53,7 +55,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
         .ok_or("notify characteristic not found")?;
-    let packet = prepare_packet(instax_pal::SUPPORT_FUNCTION_INFO, instax_pal::SupportFunctionInfoType::BATTERY_INFO as u8);
+    let packet = prepare_packet(
+        SID::SUPPORT_FUNCTION_INFO as u16,
+        SupportFunctionInfoType::BATTERY_INFO as u8,
+    );
     dbg!(&packet);
     write_characteristic.write(&packet).await?;
     let mut updates = notify_characteristic.notify().await?;
@@ -65,7 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 fn prepare_packet(sid: u16, msg_type: u8) -> Vec<u8> {
     let mut packet: Vec<u8> = Vec::new();
-    packet.extend(DIRECTION_TO.to_be_bytes());
+    packet.extend((Direction::TO as u16).to_be_bytes());
     let size: u16 = 8; // Direction(2) + Size (2) + SID (2) + Type (1) + Checksum (1)
     packet.extend(size.to_be_bytes());
     packet.extend(sid.to_be_bytes());
