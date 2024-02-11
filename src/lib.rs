@@ -1,4 +1,7 @@
+use num_derive::FromPrimitive;
+
 // Instax protocol direction: to or from device
+#[derive(Debug, FromPrimitive, Copy, Clone)]
 #[allow(non_camel_case_types)]
 pub enum Direction {
     TO = 0x4162,    // "Ab"
@@ -7,6 +10,7 @@ pub enum Direction {
 
 // SID: Instax protocol opcodes
 // u16 with modeCode, typeCode as big endian
+#[derive(Debug, FromPrimitive, Copy, Clone)]
 #[allow(non_camel_case_types)]
 pub enum SID {
     UNKNOWN = 0xffff,

@@ -2,7 +2,7 @@ use bluest::{pairing::NoInputOutputPairingAgent, Adapter, Uuid};
 use futures_lite::StreamExt;
 use instax_pal::*;
 use std::error::Error;
-use std::time::Duration;
+use num_traits::FromPrimitive;
 
 // UART-like GATT service
 // Commands are sent to INSTAX_WRITE_UUID characteristic
@@ -11,6 +11,44 @@ use std::time::Duration;
 const INSTAX_SERVICE_UUID: Uuid = Uuid::from_u128(0x70954782_2d83_473d_9e5f_81e1d02d5273);
 const INSTAX_WRITE_UUID: Uuid = Uuid::from_u128(0x70954783_2d83_473d_9e5f_81e1d02d5273);
 const INSTAX_NOTIFY_UUID: Uuid = Uuid::from_u128(0x70954784_2d83_473d_9e5f_81e1d02d5273);
+
+#[derive(Debug)]
+struct Packet {
+    direction: Direction,
+    size: u16,
+    sid: SID,
+    msg_type: u8,
+    data: Vec<u8>
+}
+impl Packet {
+    fn pack(&self) -> Vec<u8> {
+        let mut packet: Vec<u8> = Vec::new();
+        packet.extend((self.direction as u16).to_be_bytes());
+        packet.extend(self.size.to_be_bytes());
+        packet.extend((self.sid as u16).to_be_bytes());
+        packet.push(self.msg_type);
+        packet.push(255 - packet.iter().sum::<u8>() as u8);
+        packet
+    }
+    fn unpack(msg: &Vec<u8>) -> Self {
+        Packet {
+            direction: FromPrimitive::from_u16(u16::from_be_bytes(msg[0..2].try_into().unwrap())).unwrap(),
+            size: u16::from_be_bytes(msg[2..4].try_into().unwrap()),
+            sid: FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap(),
+            msg_type: msg[7],
+            data: msg[8..].to_vec()
+        }
+    }
+    fn with_type(sid: SID, msg_type: u8) -> Self {
+        Packet {
+            direction: Direction::TO,
+            size: 8, // Direction(2) + Size (2) + SID (2) + Type (1) + Checksum (1)
+            sid,
+            msg_type,
+            data: vec![],
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -47,35 +85,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None => return Err("Service not found".into()),
     };
     let characteristics = service.characteristics().await?;
-    let write_characteristic = characteristics
+    let write_char = characteristics
         .iter()
         .find(|x| x.uuid() == INSTAX_WRITE_UUID)
         .ok_or("write characteristic not found")?;
-    let notify_characteristic = characteristics
+    let notify_char = characteristics
         .iter()
         .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
         .ok_or("notify characteristic not found")?;
-    let packet = prepare_packet(
-        SID::SUPPORT_FUNCTION_INFO as u16,
-        SupportFunctionInfoType::BATTERY_INFO as u8,
-    );
+    let packet = Packet::with_type(SID::SUPPORT_FUNCTION_INFO, SupportFunctionInfoType::BATTERY_INFO as u8);
     dbg!(&packet);
-    write_characteristic.write(&packet).await?;
-    let mut updates = notify_characteristic.notify().await?;
-    while let Some(val) = updates.next().await {
-        println!("Message: {:?}", val?);
+    write_char.write(&packet.pack()).await?;
+    let mut updates = notify_char.notify().await?;
+    while let Some(msg) = updates.next().await {
+        let response = Packet::unpack(&msg.unwrap());
+        dbg!(&response);
     }
     Ok(())
-}
-
-fn prepare_packet(sid: u16, msg_type: u8) -> Vec<u8> {
-    let mut packet: Vec<u8> = Vec::new();
-    packet.extend((Direction::TO as u16).to_be_bytes());
-    let size: u16 = 8; // Direction(2) + Size (2) + SID (2) + Type (1) + Checksum (1)
-    packet.extend(size.to_be_bytes());
-    packet.extend(sid.to_be_bytes());
-    packet.push(msg_type);
-    let checksum: u8 = 255 - packet.iter().sum::<u8>() as u8;
-    packet.push(checksum);
-    packet
 }

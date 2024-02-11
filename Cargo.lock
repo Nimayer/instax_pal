@@ -371,6 +371,8 @@ version = "0.1.0"
 dependencies = [
  "bluest",
  "futures-lite 2.2.0",
+ "num-derive",
+ "num-traits",
  "tokio",
 ]
 
