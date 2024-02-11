@@ -1,4 +1,4 @@
-use bluest::{pairing::NoInputOutputPairingAgent, Adapter, Uuid};
+use bluest::{pairing::NoInputOutputPairingAgent, Adapter, Uuid, Characteristic};
 use futures_lite::StreamExt;
 use instax_pal::*;
 use std::error::Error;
@@ -93,13 +93,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
         .ok_or("notify characteristic not found")?;
-    let packet = Packet::with_type(SID::SUPPORT_FUNCTION_INFO, SupportFunctionInfoType::BATTERY_INFO as u8);
-    dbg!(&packet);
-    write_char.write(&packet.pack()).await?;
-    let mut updates = notify_char.notify().await?;
+    get_battery_level(write_char, notify_char).await;
+    Ok(())
+}
+
+async fn get_battery_level(write_char: &Characteristic, notify_char: &Characteristic) {
+    let packet = Packet::with_type(
+        SID::SUPPORT_FUNCTION_INFO,
+        SupportFunctionInfoType::BATTERY_INFO as u8
+    );
+    write_char.write(&packet.pack()).await.unwrap();
+    let mut updates = notify_char.notify().await.unwrap();
     while let Some(msg) = updates.next().await {
         let response = Packet::unpack(&msg.unwrap());
-        dbg!(&response);
+        println!("Battery level: {}%", response.data[1]);
+        break
     }
-    Ok(())
 }
