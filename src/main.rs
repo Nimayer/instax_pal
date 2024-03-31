@@ -148,7 +148,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .ok_or("notify characteristic not found")?;
     get_battery_info(write_char, notify_char).await;
     // get_function_info(write_char, notify_char).await;
-    automatic_photo_upload(write_char, notify_char).await;
+    // automatic_photo_download(write_char, notify_char).await;
+    live_view_test(write_char, notify_char).await;
     Ok(())
 }
 
@@ -202,7 +203,7 @@ async fn get_function_info(write_char: &Characteristic, notify_char: &Characteri
     let response = receive_packet(notify_char).await.unwrap();
 }
 
-async fn automatic_photo_upload(write_char: &Characteristic, notify_char: &Characteristic) {
+async fn automatic_photo_download(write_char: &Characteristic, notify_char: &Characteristic) {
     println!("Auto upload info");
     let packet = Packet::with_sid(SID::IMAGE_AUTO_UPLOAD_INFO);
     send_packet(write_char, packet).await;
@@ -226,4 +227,18 @@ async fn automatic_photo_upload(write_char: &Characteristic, notify_char: &Chara
         println!("Frame: {}", frame);
         thread::sleep(Duration::from_millis(600));
     }
+}
+
+async fn live_view_test(write_char: &Characteristic, notify_char: &Characteristic) {
+    println!("Live view start");
+    let packet = Packet::with_type(SID::LIVE_VIEW_START, 0);
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    println!("Live view receive");
+    let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
+    send_packet(write_char, packet).await;
+    let data = receive_data(notify_char).await.unwrap();
 }
