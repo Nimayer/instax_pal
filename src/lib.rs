@@ -120,6 +120,20 @@ pub enum SupportFunctionInfoType {
     CAMERA_HISTORY_INFO = 5,
 }
 
+// Payload for DEVICE_INFO
+#[allow(non_camel_case_types)]
+pub enum DeviceInfoType {
+    MANUFACTURER_NAME = 0,
+    MODEL_NUMBER = 1,
+    SERIAL_NUMBER = 2,
+    HW_REVISION = 3,
+    FW_REVISION = 4,
+    SW_REVISION = 5,
+    SYSTEM_ID = 6,
+    REGULATORY_DATA = 7,
+    PNP_ID = 8,
+}
+
 #[allow(non_camel_case_types)]
 pub enum ActiveMedia {
     SD = 0,

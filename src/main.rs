@@ -13,7 +13,15 @@ const INSTAX_WRITE_UUID: Uuid = Uuid::from_u128(0x70954783_2d83_473d_9e5f_81e1d0
 const INSTAX_NOTIFY_UUID: Uuid = Uuid::from_u128(0x70954784_2d83_473d_9e5f_81e1d02d5273);
 
 #[derive(Debug)]
+enum PacketType {
+    Sid = 0,
+    Type = 1,
+    Data = 3,
+}
+
+#[derive(Debug)]
 struct Packet {
+    p_type: PacketType,
     direction: Direction,
     size: u16,
     sid: SID,
@@ -26,12 +34,25 @@ impl Packet {
         packet.extend((self.direction as u16).to_be_bytes());
         packet.extend(self.size.to_be_bytes());
         packet.extend((self.sid as u16).to_be_bytes());
-        packet.push(self.msg_type);
-        packet.push(255 - packet.iter().sum::<u8>() as u8);
+        if matches!(self.p_type, PacketType::Type) {
+            packet.push(self.msg_type);
+        }
+        if matches!(self.p_type, PacketType::Data) {
+            packet.extend(&self.data);
+        }
+        // Add checksum
+        let checksum: u8 = 255 - packet.iter().fold(0, |a: u8, &b| a.wrapping_add(b));
+        packet.push(checksum);
         packet
     }
     fn unpack(msg: &Vec<u8>) -> Self {
         Packet {
+            p_type : match msg.len() {
+                    0..=7 => panic!("ERROR: Packet too short. len:{}", msg.len()),
+                    8 => PacketType::Sid,
+                    9 => PacketType::Type,
+                    _ => PacketType::Data,
+                },
             direction: FromPrimitive::from_u16(u16::from_be_bytes(msg[0..2].try_into().unwrap())).unwrap(),
             size: u16::from_be_bytes(msg[2..4].try_into().unwrap()),
             sid: FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap(),
@@ -39,13 +60,34 @@ impl Packet {
             data: msg[8..].to_vec()
         }
     }
+    fn with_sid(sid: SID) -> Self {
+        Packet {
+            p_type: PacketType::Sid,
+            direction: Direction::TO,
+            size: 7, // Direction(2) + Size (2) + SID (2) + Checksum (1)
+            sid,
+            msg_type: 0,
+            data: vec![],
+        }
+    }
     fn with_type(sid: SID, msg_type: u8) -> Self {
         Packet {
+            p_type: PacketType::Type,
             direction: Direction::TO,
             size: 8, // Direction(2) + Size (2) + SID (2) + Type (1) + Checksum (1)
             sid,
             msg_type,
             data: vec![],
+        }
+    }
+    fn with_data(sid: SID, data: Vec<u8>) -> Self {
+        Packet {
+            p_type: PacketType::Data,
+            direction: Direction::TO,
+            size: 7 + data.len() as u16, // Direction(2) + Size (2) + SID (2) + Payload (N) + Checksum (1)
+            sid,
+            msg_type: 0,
+            data: data,
         }
     }
 }
@@ -93,20 +135,65 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
         .ok_or("notify characteristic not found")?;
-    get_battery_level(write_char, notify_char).await;
+    get_battery_info(write_char, notify_char).await;
+    // get_function_info(write_char, notify_char).await;
+    automatic_photo_upload(write_char, notify_char).await;
     Ok(())
 }
 
-async fn get_battery_level(write_char: &Characteristic, notify_char: &Characteristic) {
+async fn send_packet(write_char: &Characteristic, packet: Packet) {
+    let data = packet.pack();
+    println!("SENT: {:x?}", &data);
+    write_char.write(&data).await.unwrap();
+}
+
+async fn receive_packet(notify_char: &Characteristic) -> Option<Packet> {
+    let mut updates = notify_char.notify().await.unwrap();
+    while let Some(msg) = updates.next().await {
+        let data = &msg.unwrap();
+        println!("RECV: {:x?}", &data);
+        let packet = Packet::unpack(&data);
+        return Some(packet);
+    }
+    None
+}
+
+async fn get_battery_info(write_char: &Characteristic, notify_char: &Characteristic) {
     let packet = Packet::with_type(
         SID::SUPPORT_FUNCTION_INFO,
         SupportFunctionInfoType::BATTERY_INFO as u8
     );
-    write_char.write(&packet.pack()).await.unwrap();
-    let mut updates = notify_char.notify().await.unwrap();
-    while let Some(msg) = updates.next().await {
-        let response = Packet::unpack(&msg.unwrap());
-        println!("Battery level: {}%", response.data[1]);
-        break
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    println!("Battery level: {}%", response.data[1]);
+}
+
+async fn get_function_info(write_char: &Characteristic, notify_char: &Characteristic) {
+    let packet = Packet::with_type(
+        SID::SUPPORT_FUNCTION_INFO,
+        SupportFunctionInfoType::CAMERA_FUNCTION_INFO as u8
+    );
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+}
+
+async fn automatic_photo_upload(write_char: &Characteristic, notify_char: &Characteristic) {
+    println!("Auto upload info");
+    let packet = Packet::with_sid(SID::IMAGE_AUTO_UPLOAD_INFO);
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    println!("Auto upload start");
+    let packet = Packet::with_data(SID::IMAGE_AUTO_UPLOAD_START, vec![0;4]);
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    println!("Auto upload data");
+    let num_frames = response.data[1];
+    for frame in 0..num_frames {
+        let frame_num = (frame as u32).to_be_bytes().to_vec();
+        let packet = Packet::with_data(SID::IMAGE_AUTO_UPLOAD_DATA, frame_num);
+        send_packet(write_char, packet).await;
+        let response = receive_packet(notify_char).await.unwrap();
+        let response = receive_packet(notify_char).await.unwrap();
+        let response = receive_packet(notify_char).await.unwrap();
     }
 }
