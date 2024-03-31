@@ -3,6 +3,7 @@ use futures_lite::StreamExt;
 use instax_pal::*;
 use std::error::Error;
 use num_traits::FromPrimitive;
+use std::{thread, time::Duration};
 
 // UART-like GATT service
 // Commands are sent to INSTAX_WRITE_UUID characteristic
@@ -116,8 +117,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .next()
         .await
         .ok_or("Failed to discover device")??;
-    println!(
-        "found device: {} ({:?})",
+    println!("found device: {} ({:?})",
         device.name().as_deref().unwrap_or("(unknown)"),
         device.id()
     );
@@ -158,11 +158,6 @@ async fn send_packet(write_char: &Characteristic, packet: Packet) {
     write_char.write(&data).await.unwrap();
 }
 
-async fn send_data(write_char: &Characteristic, data: Vec<u8>) {
-    println!("SENT: {:x?}", &data);
-    write_char.write(&data).await.unwrap();
-}
-
 async fn receive_packet(notify_char: &Characteristic) -> Option<Packet> {
     let mut updates = notify_char.notify().await.unwrap();
     while let Some(msg) = updates.next().await {
@@ -175,11 +170,15 @@ async fn receive_packet(notify_char: &Characteristic) -> Option<Packet> {
 }
 
 async fn receive_data(notify_char: &Characteristic) -> Option<Vec<u8>> {
+    let mut data: Vec<u8> = Vec::new();
     let mut updates = notify_char.notify().await.unwrap();
     while let Some(msg) = updates.next().await {
-        let data = msg.unwrap();
-        println!("RECV: {:x?}", &data);
-        return Some(data);
+        let payload = msg.unwrap();
+        data.extend(&payload);
+        println!("RECV: {:x?}", &payload);
+        if payload.len() == 1 {
+            return Some(data)
+        }
     }
     None
 }
@@ -219,13 +218,12 @@ async fn automatic_photo_upload(write_char: &Characteristic, notify_char: &Chara
     println!("Auto upload data");
     let num_frames = response.data[3];
     println!("Receiving {} frames", num_frames);
-    for frame in 0..num_frames {
+    for frame in 0..50 {
         let frame_num = (frame as u32).to_be_bytes().to_vec();
         let packet = Packet::with_data(SID::IMAGE_AUTO_UPLOAD_DATA, frame_num);
         send_packet(write_char, packet).await;
-        let response = receive_packet(notify_char).await.unwrap();
-        let response = receive_data(notify_char).await.unwrap();
-        let checksum: u8 = 255 - response.iter().fold(0, |a: u8, &b| a.wrapping_add(b));
-        send_data(write_char, vec![checksum]).await;
+        let data = receive_data(notify_char).await.unwrap();
+        println!("Frame: {}", frame);
+        thread::sleep(Duration::from_millis(600));
     }
 }
