@@ -46,18 +46,29 @@ impl Packet {
         packet
     }
     fn unpack(msg: &Vec<u8>) -> Self {
-        Packet {
-            p_type : match msg.len() {
-                    0..=7 => panic!("ERROR: Packet too short. len:{}", msg.len()),
-                    8 => PacketType::Sid,
-                    9 => PacketType::Type,
-                    _ => PacketType::Data,
-                },
-            direction: FromPrimitive::from_u16(u16::from_be_bytes(msg[0..2].try_into().unwrap())).unwrap(),
-            size: u16::from_be_bytes(msg[2..4].try_into().unwrap()),
-            sid: FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap(),
-            msg_type: msg[7],
-            data: msg[8..].to_vec()
+        let p_type = match msg.len() {
+            0..=7 => panic!("ERROR: Packet too short. len:{}", msg.len()),
+            8 => PacketType::Sid,
+            9 => PacketType::Type,
+            _ => PacketType::Data,
+        };
+        match p_type {
+            PacketType::Sid => {
+                let direction = FromPrimitive::from_u16(u16::from_be_bytes(msg[0..2].try_into().unwrap())).unwrap();
+                let size = u16::from_be_bytes(msg[2..4].try_into().unwrap());
+                let sid = FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap();
+                let msg_type = msg[6];
+                let data = Vec::new();
+                Packet{p_type, direction, size, sid, msg_type, data}
+            }
+            PacketType::Type | PacketType::Data => {
+                let direction = FromPrimitive::from_u16(u16::from_be_bytes(msg[0..2].try_into().unwrap())).unwrap();
+                let size = u16::from_be_bytes(msg[2..4].try_into().unwrap());
+                let sid = FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap();
+                let msg_type = msg[6];
+                let data: Vec<u8> = msg[6..].to_vec();
+                Packet{p_type, direction, size, sid, msg_type, data}
+            }
         }
     }
     fn with_sid(sid: SID) -> Self {
@@ -147,6 +158,11 @@ async fn send_packet(write_char: &Characteristic, packet: Packet) {
     write_char.write(&data).await.unwrap();
 }
 
+async fn send_data(write_char: &Characteristic, data: Vec<u8>) {
+    println!("SENT: {:x?}", &data);
+    write_char.write(&data).await.unwrap();
+}
+
 async fn receive_packet(notify_char: &Characteristic) -> Option<Packet> {
     let mut updates = notify_char.notify().await.unwrap();
     while let Some(msg) = updates.next().await {
@@ -154,6 +170,16 @@ async fn receive_packet(notify_char: &Characteristic) -> Option<Packet> {
         println!("RECV: {:x?}", &data);
         let packet = Packet::unpack(&data);
         return Some(packet);
+    }
+    None
+}
+
+async fn receive_data(notify_char: &Characteristic) -> Option<Vec<u8>> {
+    let mut updates = notify_char.notify().await.unwrap();
+    while let Some(msg) = updates.next().await {
+        let data = msg.unwrap();
+        println!("RECV: {:x?}", &data);
+        return Some(data);
     }
     None
 }
@@ -182,18 +208,24 @@ async fn automatic_photo_upload(write_char: &Characteristic, notify_char: &Chara
     let packet = Packet::with_sid(SID::IMAGE_AUTO_UPLOAD_INFO);
     send_packet(write_char, packet).await;
     let response = receive_packet(notify_char).await.unwrap();
+    if response.msg_type == 0x81 {
+        println!("No photo available");
+        return;
+    }
     println!("Auto upload start");
     let packet = Packet::with_data(SID::IMAGE_AUTO_UPLOAD_START, vec![0;4]);
     send_packet(write_char, packet).await;
     let response = receive_packet(notify_char).await.unwrap();
     println!("Auto upload data");
-    let num_frames = response.data[1];
+    let num_frames = response.data[3];
+    println!("Receiving {} frames", num_frames);
     for frame in 0..num_frames {
         let frame_num = (frame as u32).to_be_bytes().to_vec();
         let packet = Packet::with_data(SID::IMAGE_AUTO_UPLOAD_DATA, frame_num);
         send_packet(write_char, packet).await;
         let response = receive_packet(notify_char).await.unwrap();
-        let response = receive_packet(notify_char).await.unwrap();
-        let response = receive_packet(notify_char).await.unwrap();
+        let response = receive_data(notify_char).await.unwrap();
+        let checksum: u8 = 255 - response.iter().fold(0, |a: u8, &b| a.wrapping_add(b));
+        send_data(write_char, vec![checksum]).await;
     }
 }
