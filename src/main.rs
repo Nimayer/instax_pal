@@ -67,7 +67,7 @@ impl Packet {
                 let size = u16::from_be_bytes(msg[2..4].try_into().unwrap());
                 let sid = FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap();
                 let msg_type = msg[6];
-                let data: Vec<u8> = msg[6..].to_vec();
+                let data: Vec<u8> = msg[7..((msg.len() - 1) as usize)].to_vec();
                 Packet{p_type, direction, size, sid, msg_type, data}
             }
         }
@@ -146,8 +146,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
         .ok_or("notify characteristic not found")?;
-    get_battery_info(write_char, notify_char).await;
-    // get_function_info(write_char, notify_char).await;
+    support_function_info(write_char, notify_char, SupportFunctionInfoType::IMAGE_SUPPORT_INFO).await;
+    support_function_info(write_char, notify_char, SupportFunctionInfoType::BATTERY_INFO).await;
+    support_function_info(write_char, notify_char, SupportFunctionInfoType::CAMERA_FUNCTION_INFO).await;
+    support_function_info(write_char, notify_char, SupportFunctionInfoType::CAMERA_HISTORY_INFO).await;
     // automatic_photo_download(write_char, notify_char).await;
     live_view_test(write_char, notify_char).await;
     Ok(())
@@ -184,23 +186,30 @@ async fn receive_data(notify_char: &Characteristic) -> Option<Vec<u8>> {
     None
 }
 
-async fn get_battery_info(write_char: &Characteristic, notify_char: &Characteristic) {
-    let packet = Packet::with_type(
-        SID::SUPPORT_FUNCTION_INFO,
-        SupportFunctionInfoType::BATTERY_INFO as u8
-    );
+async fn support_function_info(write_char: &Characteristic, notify_char: &Characteristic, info_type: SupportFunctionInfoType) {
+    let packet = Packet::with_type(SID::SUPPORT_FUNCTION_INFO, info_type.clone() as u8);
     send_packet(write_char, packet).await;
     let response = receive_packet(notify_char).await.unwrap();
-    println!("Battery level: {}%", response.data[1]);
-}
-
-async fn get_function_info(write_char: &Characteristic, notify_char: &Characteristic) {
-    let packet = Packet::with_type(
-        SID::SUPPORT_FUNCTION_INFO,
-        SupportFunctionInfoType::CAMERA_FUNCTION_INFO as u8
-    );
-    send_packet(write_char, packet).await;
-    let response = receive_packet(notify_char).await.unwrap();
+    match &info_type {
+        SupportFunctionInfoType::IMAGE_SUPPORT_INFO => {
+            let info = ImageSupportInfo::from_bytes(&response.data);
+            dbg!(info);
+        }
+        SupportFunctionInfoType::BATTERY_INFO => {
+            let info = BatteryInfo::from_bytes(&response.data);
+            dbg!(&info);
+            println!("Battery level: {}%", &info.battery_capacity);
+        }
+        SupportFunctionInfoType::CAMERA_FUNCTION_INFO => {
+            let info = CameraFunctionInfo::from_bytes(&response.data);
+            dbg!(&info);
+        }
+        SupportFunctionInfoType::CAMERA_HISTORY_INFO => {
+            let info = CameraHistoryInfo::from_bytes(&response.data);
+            dbg!(&info);
+        }
+        _ => panic!("Info type: {:?} not implemented", &info_type)
+    }
 }
 
 async fn automatic_photo_download(write_char: &Characteristic, notify_char: &Characteristic) {

@@ -1,3 +1,4 @@
+use num_traits::FromPrimitive;
 use num_derive::FromPrimitive;
 
 // Instax protocol direction: to or from device
@@ -111,13 +112,14 @@ pub enum SID {
 
 // Payload for SUPPORT_FUNCTION_INFO
 #[allow(non_camel_case_types)]
+#[derive(Debug, Clone)]
 pub enum SupportFunctionInfoType {
     IMAGE_SUPPORT_INFO = 0,
     BATTERY_INFO = 1,
-    PRINTER_FUNCTION_INFO = 2,
-    PRINT_HISTORY_INFO = 3,
-    CAMERA_FUNCTION_INFO = 4,
-    CAMERA_HISTORY_INFO = 5,
+    CAMERA_FUNCTION_INFO = 3,
+    CAMERA_HISTORY_INFO = 4,
+    PRINTER_FUNCTION_INFO = 5,
+    PRINT_HISTORY_INFO = 6,
 }
 
 // Payload for DEVICE_INFO
@@ -135,8 +137,106 @@ pub enum DeviceInfoType {
 }
 
 #[allow(non_camel_case_types)]
+#[derive(Debug, FromPrimitive)]
+pub enum CameraErrorType {
+    NO_ERROR = -1,
+    BATTERY_NG_ERROR = 0,
+    NO_BATTERY_ERROR = 1,
+    BATTERY_TEMP_ERROR = 2,
+    BATTERY_CHARGE_FAULT_ERROR = 3,
+    MEDIA_CAPACITY_FULL = 7,
+    FRAME_NO_ERROR = 8,
+    SW_ABNORMALITY_ERROR = 29,
+    HW_ABNORMALITY_ERROR = 30,
+    MECHA_ABNORMALITY_ERROR = 31,
+    RESERVED_ERROR = -2,
+}
+
+#[allow(non_camel_case_types)]
 pub enum ActiveMedia {
     SD = 0,
     BUILT_IN_MEDIA = 1,
     UNDEFINED = 255,
+}
+
+#[derive(Debug)]
+pub struct ImageSupportInfo {
+    pub width: u16,
+    pub height: u16,
+    pub pic_type: u8,
+    pub pic_option: u8,
+    pub size: u32,
+}
+
+impl ImageSupportInfo {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Self {
+        assert_eq!(bytes[0], SupportFunctionInfoType::IMAGE_SUPPORT_INFO as u8);
+        ImageSupportInfo {
+            width: u16::from_be_bytes([bytes[1], bytes[2]]),
+            height: u16::from_be_bytes([bytes[3], bytes[4]]),
+            pic_type: bytes[5],
+            pic_option: bytes[6],
+            size: u32::from_be_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BatteryInfo {
+    pub battery_level: u8,
+    pub battery_capacity: u8,
+    pub charger_type: u8,
+    pub charger_state: u8
+}
+
+impl BatteryInfo {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Self {
+        assert_eq!(bytes[0], SupportFunctionInfoType::BATTERY_INFO as u8);
+        BatteryInfo {
+            battery_level: bytes[1],
+            battery_capacity: bytes[2],
+            charger_type: bytes[3],
+            charger_state: bytes[4]
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CameraFunctionInfo {
+    pub battery_level: u8,
+    pub is_charging: bool,
+    pub battery_capacity: u8,
+    pub auto_image_transfer_count: u8,
+    pub charger_state: u8,
+    pub camera_error_type: CameraErrorType,
+    pub camera_status: u8,
+}
+
+impl CameraFunctionInfo {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Self {
+        assert_eq!(bytes[0], SupportFunctionInfoType::CAMERA_FUNCTION_INFO as u8);
+        CameraFunctionInfo {
+            battery_level: bytes[1] & 15,
+            is_charging: (bytes[1] << 4 & 1) != 0,
+            battery_capacity: bytes[2],
+            auto_image_transfer_count: bytes[3],
+            charger_state: bytes[4],
+            camera_error_type: FromPrimitive::from_u16(u16::from_be_bytes([bytes[5], bytes[6]])).unwrap(),
+            camera_status: bytes[7],
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CameraHistoryInfo {
+    pub total_shoot_num: u32,
+}
+
+impl CameraHistoryInfo {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Self {
+        assert_eq!(bytes[0], SupportFunctionInfoType::CAMERA_HISTORY_INFO as u8);
+        CameraHistoryInfo {
+            total_shoot_num: u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]),
+        }
+    }
 }
