@@ -62,12 +62,20 @@ impl Packet {
                 let data = Vec::new();
                 Packet{p_type, direction, size, sid, msg_type, data}
             }
-            PacketType::Type | PacketType::Data => {
+            PacketType::Type => {
                 let direction = FromPrimitive::from_u16(u16::from_be_bytes(msg[0..2].try_into().unwrap())).unwrap();
                 let size = u16::from_be_bytes(msg[2..4].try_into().unwrap());
                 let sid = FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap();
                 let msg_type = msg[6];
                 let data: Vec<u8> = msg[7..((msg.len() - 1) as usize)].to_vec();
+                Packet{p_type, direction, size, sid, msg_type, data}
+            }
+            PacketType::Data => {
+                let direction = FromPrimitive::from_u16(u16::from_be_bytes(msg[0..2].try_into().unwrap())).unwrap();
+                let size = u16::from_be_bytes(msg[2..4].try_into().unwrap());
+                let sid = FromPrimitive::from_u16(u16::from_be_bytes(msg[4..6].try_into().unwrap())).unwrap();
+                let msg_type = 0;
+                let data: Vec<u8> = msg[6..((msg.len() - 1) as usize)].to_vec();
                 Packet{p_type, direction, size, sid, msg_type, data}
             }
         }
@@ -147,12 +155,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
         .ok_or("notify characteristic not found")?;
     support_function_version_info(write_char, notify_char).await;
+    parameter_read(write_char, notify_char, ReadWriteSettingType::TRANSFER_FORMAT).await;
+    parameter_read(write_char, notify_char, ReadWriteSettingType::FLASH_SETTING).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::IMAGE_SUPPORT_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::BATTERY_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::CAMERA_FUNCTION_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::CAMERA_HISTORY_INFO).await;
     // automatic_photo_download(write_char, notify_char).await;
-    live_view_test(write_char, notify_char).await;
+    //live_view_test(write_char, notify_char).await;
     Ok(())
 }
 
@@ -220,12 +230,21 @@ async fn support_function_info(write_char: &Characteristic, notify_char: &Charac
     }
 }
 
+async fn parameter_read(write_char: &Characteristic, notify_char: &Characteristic, setting: ReadWriteSettingType) {
+    let payload = vec![setting as u8, ReadWriteSettingMode::GET_CURRENT_SETTING as u8, 0x00, 0x00, 0x00, 0x00];
+    let packet = Packet::with_data(SID::PARAMETER_RW, payload);
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    let info = ParameterReadWriteResponse::from_bytes(&response.data);
+    dbg!(info);
+}
+
 async fn automatic_photo_download(write_char: &Characteristic, notify_char: &Characteristic) {
     println!("Auto upload info");
     let packet = Packet::with_sid(SID::IMAGE_AUTO_UPLOAD_INFO);
     send_packet(write_char, packet).await;
     let response = receive_packet(notify_char).await.unwrap();
-    if response.msg_type == 0x81 {
+    if response.data[0] == 0x81 {
         println!("No photo available");
         return;
     }
@@ -252,9 +271,6 @@ async fn live_view_test(write_char: &Characteristic, notify_char: &Characteristi
     send_packet(write_char, packet).await;
     let response = receive_packet(notify_char).await.unwrap();
     println!("Live view receive");
-    let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
-    send_packet(write_char, packet).await;
-    let response = receive_packet(notify_char).await.unwrap();
     let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
     send_packet(write_char, packet).await;
     let data = receive_data(notify_char).await.unwrap();

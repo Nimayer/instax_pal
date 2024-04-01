@@ -159,6 +159,36 @@ pub enum ActiveMedia {
     UNDEFINED = 255,
 }
 
+#[allow(non_camel_case_types)]
+#[derive(Debug, FromPrimitive)]
+pub enum ReadWriteSettingType {
+    AUTO_POWER_OFF = 0,
+    LED_AT_START_UP = 1,
+    AUTOMATIC_PICTURE_DELETION = 2,
+    VOLUME_SETTING = 3,
+    POWER_ON_SOUND_TYPE = 4,
+    VOICE_SHUTTER_SOUND_TYPE = 5,
+    BGM_SOUND_TYPE = 6,
+    DATE_PRINT_SETTING = 7,
+    DATE_PRINT_ORDER_SETTING = 8,
+    THREED_LUT_PRINT_SETTING = 9,
+    TRANSFER_FORMAT = 10,
+    FLASH_SETTING = 11,
+    EXPOSURE_SETTING = 12,
+    LONG_INTERVAL_SHOOT_TIME = 14,
+    SHORT_INTERVAL_SHOOT_TIME = 16,
+    VOICE_LANGUAGE_SETTINGS = 17,
+    DELETE_ORIGINAL_IMAGE_AFTER_TRANSFER = 18,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, FromPrimitive)]
+pub enum ReadWriteSettingMode {
+    GET_CURRENT_SETTING = 0,
+    GET_FACTORY_SETTING = 1,
+    SET_FACTORY_SETTING = 2,
+}
+
 #[derive(Debug)]
 pub struct SupportFunctionVersionInfo {
     pub support_function_info: u8,
@@ -197,13 +227,13 @@ pub struct ImageSupportInfo {
 
 impl ImageSupportInfo {
     pub fn from_bytes(bytes: &Vec<u8>) -> Self {
-        assert_eq!(bytes[0], SupportFunctionInfoType::IMAGE_SUPPORT_INFO as u8);
+        assert_eq!(bytes[1], SupportFunctionInfoType::IMAGE_SUPPORT_INFO as u8);
         ImageSupportInfo {
-            width: u16::from_be_bytes([bytes[1], bytes[2]]),
-            height: u16::from_be_bytes([bytes[3], bytes[4]]),
-            pic_type: bytes[5],
-            pic_option: bytes[6],
-            size: u32::from_be_bytes([bytes[7], bytes[8], bytes[9], bytes[10]]),
+            width: u16::from_be_bytes([bytes[2], bytes[3]]),
+            height: u16::from_be_bytes([bytes[4], bytes[5]]),
+            pic_type: bytes[6],
+            pic_option: bytes[7],
+            size: u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
         }
     }
 }
@@ -218,12 +248,12 @@ pub struct BatteryInfo {
 
 impl BatteryInfo {
     pub fn from_bytes(bytes: &Vec<u8>) -> Self {
-        assert_eq!(bytes[0], SupportFunctionInfoType::BATTERY_INFO as u8);
+        assert_eq!(bytes[1], SupportFunctionInfoType::BATTERY_INFO as u8);
         BatteryInfo {
-            battery_level: bytes[1],
-            battery_capacity: bytes[2],
-            charger_type: bytes[3],
-            charger_state: bytes[4]
+            battery_level: bytes[2],
+            battery_capacity: bytes[3],
+            charger_type: bytes[4],
+            charger_state: bytes[5]
         }
     }
 }
@@ -241,15 +271,15 @@ pub struct CameraFunctionInfo {
 
 impl CameraFunctionInfo {
     pub fn from_bytes(bytes: &Vec<u8>) -> Self {
-        assert_eq!(bytes[0], SupportFunctionInfoType::CAMERA_FUNCTION_INFO as u8);
+        assert_eq!(bytes[1], SupportFunctionInfoType::CAMERA_FUNCTION_INFO as u8);
         CameraFunctionInfo {
-            battery_level: bytes[1] & 15,
-            is_charging: (bytes[1] << 4 & 1) != 0,
-            battery_capacity: bytes[2],
-            auto_image_transfer_count: bytes[3],
-            charger_state: bytes[4],
-            camera_error_type: FromPrimitive::from_u16(u16::from_be_bytes([bytes[5], bytes[6]])).unwrap(),
-            camera_status: bytes[7],
+            battery_level: bytes[2] & 15,
+            is_charging: (bytes[2] << 4 & 1) != 0,
+            battery_capacity: bytes[3],
+            auto_image_transfer_count: bytes[4],
+            charger_state: bytes[5],
+            camera_error_type: FromPrimitive::from_u16(u16::from_be_bytes([bytes[6], bytes[7]])).unwrap(),
+            camera_status: bytes[8],
         }
     }
 }
@@ -261,9 +291,27 @@ pub struct CameraHistoryInfo {
 
 impl CameraHistoryInfo {
     pub fn from_bytes(bytes: &Vec<u8>) -> Self {
-        assert_eq!(bytes[0], SupportFunctionInfoType::CAMERA_HISTORY_INFO as u8);
+        assert_eq!(bytes[1], SupportFunctionInfoType::CAMERA_HISTORY_INFO as u8);
         CameraHistoryInfo {
-            total_shoot_num: u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]),
+            total_shoot_num: u32::from_be_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ParameterReadWriteResponse {
+    pub mode: ReadWriteSettingMode,
+    pub setting: ReadWriteSettingType,
+    pub value: u32
+}
+
+impl ParameterReadWriteResponse {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Self {
+        dbg!(&bytes);
+        ParameterReadWriteResponse {
+            mode: FromPrimitive::from_u8(bytes[0]).unwrap(),
+            setting: FromPrimitive::from_u8(bytes[1]).unwrap(),
+            value: u32::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5]]),
         }
     }
 }
