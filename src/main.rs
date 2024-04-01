@@ -4,6 +4,7 @@ use instax_pal::*;
 use std::error::Error;
 use num_traits::FromPrimitive;
 use std::{thread, time::Duration};
+use chrono::prelude::*;
 
 // UART-like GATT service
 // Commands are sent to INSTAX_WRITE_UUID characteristic
@@ -157,12 +158,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     support_function_version_info(write_char, notify_char).await;
     parameter_read(write_char, notify_char, ReadWriteSettingType::TRANSFER_FORMAT).await;
     parameter_read(write_char, notify_char, ReadWriteSettingType::FLASH_SETTING).await;
+    set_timedate(write_char, notify_char).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::IMAGE_SUPPORT_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::BATTERY_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::CAMERA_FUNCTION_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::CAMERA_HISTORY_INFO).await;
     // automatic_photo_download(write_char, notify_char).await;
-    //live_view_test(write_char, notify_char).await;
+    live_view_test(write_char, notify_char).await;
     Ok(())
 }
 
@@ -239,6 +241,19 @@ async fn parameter_read(write_char: &Characteristic, notify_char: &Characteristi
     dbg!(info);
 }
 
+async fn set_timedate(write_char: &Characteristic, notify_char: &Characteristic) {
+    let now = Utc::now();
+    let formatted = now.format("%Y%m%d%H%M%S").to_string();
+    let mut bytes = formatted.into_bytes();
+    let mut payload: Vec<u8> = vec![2];
+    payload.append(&mut bytes);
+    let packet = Packet::with_data(SID::TIME_SETTING, payload);
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    let info = DateTimeResponse::from_bytes(&response.data);
+    dbg!(info);
+}
+
 async fn automatic_photo_download(write_char: &Characteristic, notify_char: &Characteristic) {
     println!("Auto upload info");
     let packet = Packet::with_sid(SID::IMAGE_AUTO_UPLOAD_INFO);
@@ -271,6 +286,10 @@ async fn live_view_test(write_char: &Characteristic, notify_char: &Characteristi
     send_packet(write_char, packet).await;
     let response = receive_packet(notify_char).await.unwrap();
     println!("Live view receive");
+    let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
+    send_packet(write_char, packet).await;
+    thread::sleep(Duration::from_millis(600));
+    let response = receive_packet(notify_char).await.unwrap();
     let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
     send_packet(write_char, packet).await;
     let data = receive_data(notify_char).await.unwrap();

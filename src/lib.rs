@@ -299,6 +299,19 @@ impl CameraHistoryInfo {
 }
 
 #[derive(Debug)]
+pub struct DateTimeResponse {
+    pub datestamp: String
+}
+
+impl DateTimeResponse {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Self {
+        DateTimeResponse {
+            datestamp: String::from_utf8_lossy(&bytes[1..]).into_owned()
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ParameterReadWriteResponse {
     pub mode: ReadWriteSettingMode,
     pub setting: ReadWriteSettingType,
@@ -307,7 +320,6 @@ pub struct ParameterReadWriteResponse {
 
 impl ParameterReadWriteResponse {
     pub fn from_bytes(bytes: &Vec<u8>) -> Self {
-        dbg!(&bytes);
         ParameterReadWriteResponse {
             mode: FromPrimitive::from_u8(bytes[0]).unwrap(),
             setting: FromPrimitive::from_u8(bytes[1]).unwrap(),
