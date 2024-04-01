@@ -116,10 +116,10 @@ pub enum SID {
 pub enum SupportFunctionInfoType {
     IMAGE_SUPPORT_INFO = 0,
     BATTERY_INFO = 1,
-    CAMERA_FUNCTION_INFO = 3,
-    CAMERA_HISTORY_INFO = 4,
-    PRINTER_FUNCTION_INFO = 5,
-    PRINT_HISTORY_INFO = 6,
+    PRINTER_FUNCTION_INFO = 2,
+    PRINT_HISTORY_INFO = 3,
+    CAMERA_FUNCTION_INFO = 4,
+    CAMERA_HISTORY_INFO = 5,
 }
 
 // Payload for DEVICE_INFO
@@ -157,6 +157,33 @@ pub enum ActiveMedia {
     SD = 0,
     BUILT_IN_MEDIA = 1,
     UNDEFINED = 255,
+}
+
+#[derive(Debug)]
+pub struct SupportFunctionVersionInfo {
+    pub support_function_info: u8,
+    pub device_info_version: u8,
+    pub support_img_info_version: u8,
+    pub battery_info_version: u8,
+    pub printer_func_info_version: u8,
+    pub printer_history_info_version: u8,
+    pub camera_func_info_version: u8,
+    pub camera_history_info_version: u8,
+}
+
+impl SupportFunctionVersionInfo {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Self {
+        SupportFunctionVersionInfo {
+            support_function_info: bytes[0],
+            device_info_version: bytes[1],
+            support_img_info_version: bytes[2],
+            battery_info_version: bytes[3],
+            printer_func_info_version: bytes[4],
+            printer_history_info_version: bytes[5],
+            camera_func_info_version: bytes[6],
+            camera_history_info_version: bytes[7],
+        }
+    }
 }
 
 #[derive(Debug)]

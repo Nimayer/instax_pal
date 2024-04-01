@@ -146,6 +146,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .find(|x| x.uuid() == INSTAX_NOTIFY_UUID)
         .ok_or("notify characteristic not found")?;
+    support_function_version_info(write_char, notify_char).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::IMAGE_SUPPORT_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::BATTERY_INFO).await;
     support_function_info(write_char, notify_char, SupportFunctionInfoType::CAMERA_FUNCTION_INFO).await;
@@ -186,6 +187,14 @@ async fn receive_data(notify_char: &Characteristic) -> Option<Vec<u8>> {
     None
 }
 
+async fn support_function_version_info(write_char: &Characteristic, notify_char: &Characteristic) {
+    let packet = Packet::with_sid(SID::SUPPORT_FUNCTION_AND_VERSION_INFO);
+    send_packet(write_char, packet).await;
+    let response = receive_packet(notify_char).await.unwrap();
+    let info = SupportFunctionVersionInfo::from_bytes(&response.data);
+    dbg!(info);
+}
+
 async fn support_function_info(write_char: &Characteristic, notify_char: &Characteristic, info_type: SupportFunctionInfoType) {
     let packet = Packet::with_type(SID::SUPPORT_FUNCTION_INFO, info_type.clone() as u8);
     send_packet(write_char, packet).await;
@@ -198,7 +207,6 @@ async fn support_function_info(write_char: &Characteristic, notify_char: &Charac
         SupportFunctionInfoType::BATTERY_INFO => {
             let info = BatteryInfo::from_bytes(&response.data);
             dbg!(&info);
-            println!("Battery level: {}%", &info.battery_capacity);
         }
         SupportFunctionInfoType::CAMERA_FUNCTION_INFO => {
             let info = CameraFunctionInfo::from_bytes(&response.data);
