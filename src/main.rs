@@ -1,4 +1,10 @@
-use std::{error::Error, pin::Pin, thread, time::Duration, process::exit};
+use std::error::Error;
+use std::pin::Pin;
+use std::thread;
+use std::time::Duration;
+use std::process::exit;
+use std::fs;
+use std::path::Path;
 use bluer::{gatt::remote::Characteristic, Uuid};
 use futures::{Stream, StreamExt};
 use num_traits::FromPrimitive;
@@ -172,7 +178,10 @@ impl Camera {
                 println!("RECV: {:x?}", &data);
                 Some(data)
             }
-            None => None
+            None => {
+                println!("No more data");
+                None
+            }
         }
     }
 
@@ -297,8 +306,15 @@ async fn live_view_test(camera: &mut Camera) {
     let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
     camera.send_packet(packet).await.unwrap();
     thread::sleep(Duration::from_millis(600));
-    let _response = camera.receive_packet().await.unwrap();
-    let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
-    camera.send_packet(packet).await.unwrap();
-    let _data = camera.receive_data().await.unwrap();
+    let mut photo = Vec::<u8>::new();
+    let mut count: u8 = 0;
+    while let Some(data) = camera.receive_data().await {
+        count += 1;
+        photo.extend(data);
+        if count == 10 {
+            break;
+        }
+    };
+    let file_path = Path::new("liveview_1.jpg");
+    fs::write(file_path, &photo[11..]).unwrap();
 }
