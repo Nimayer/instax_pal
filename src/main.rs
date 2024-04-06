@@ -1,10 +1,9 @@
-use bluest::{pairing::NoInputOutputPairingAgent, Adapter, Uuid, Characteristic};
-use futures_lite::{StreamExt, Stream};
-use instax_pal::*;
-use std::{error::Error, pin::Pin};
+use std::{error::Error, pin::Pin, thread, time::Duration, process::exit};
+use bluer::{gatt::remote::Characteristic, Uuid};
+use futures::{Stream, StreamExt};
 use num_traits::FromPrimitive;
-use std::{thread, time::Duration};
 use chrono::prelude::*;
+use instax_pal::*;
 
 // UART-like GATT service
 // Commands are sent to INSTAX_WRITE_UUID characteristic
@@ -22,7 +21,7 @@ enum PacketType {
 }
 
 #[derive(Debug)]
-struct Packet {
+pub struct Packet {
     p_type: PacketType,
     direction: Direction,
     size: u16,
@@ -31,7 +30,7 @@ struct Packet {
     data: Vec<u8>
 }
 impl Packet {
-    fn pack(&self) -> Vec<u8> {
+    pub fn pack(&self) -> Vec<u8> {
         let mut packet: Vec<u8> = Vec::new();
         packet.extend((self.direction as u16).to_be_bytes());
         packet.extend(self.size.to_be_bytes());
@@ -47,7 +46,7 @@ impl Packet {
         packet.push(checksum);
         packet
     }
-    fn unpack(msg: &Vec<u8>) -> Self {
+    pub fn unpack(msg: &Vec<u8>) -> Self {
         let p_type = match msg.len() {
             0..=7 => panic!("ERROR: Packet too short. len:{}", msg.len()),
             8 => PacketType::Sid,
@@ -113,89 +112,84 @@ impl Packet {
     }
 }
 
-struct Camera {
-    write_char: Characteristic,
-    notify_stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>, bluest::Error>> + Send + Unpin>>,
+pub struct Camera {
+    write_characteristic: Characteristic,
+    notify_stream: Pin<Box<dyn Stream<Item = Vec<u8>>>>
 }
-impl Camera {
-    async fn new() -> Result<Self, Box<dyn Error>> {
-        let adapter = Adapter::default()
-            .await
-            .ok_or("Bluetooth adapter not found")?;
-        adapter.wait_available().await?;
-        println!("Searching Instax device");
-        let device = adapter
-            .discover_devices(&[INSTAX_SERVICE_UUID])
-            .await?
-            .next()
-            .await
-            .ok_or("Failed to discover device")??;
-        println!("found device: {} ({:?})",
-            device.name().as_deref().unwrap_or("(unknown)"),
-            device.id()
-        );
-        // HACK: on some laptops we need to repeat pairing, otherwise we can't connect
-        if device.is_paired().await? {
-            println!("Repeating device pairing");
-            device.unpair().await?
-        }
-        device.pair_with_agent(&NoInputOutputPairingAgent).await?;
-        adapter.connect_device(&device).await?;
-        println!("connected!");
-        let service = match device
-            .discover_services_with_uuid(INSTAX_SERVICE_UUID)
-            .await?
-            .get(0)
-        {
-            Some(service) => service.clone(),
-            None => return Err("Service not found".into()),
-        };
-        let characteristics = service.characteristics().await?;
-        let write_char = characteristics
-            .iter()
-            .find(|x| x.uuid() == INSTAX_WRITE_UUID)
-            .ok_or("write characteristic not found")?
-            .clone();
-        let notify_char = characteristics
-            .iter()
-            .find(|x| x.uuid()  == INSTAX_NOTIFY_UUID)
-            .ok_or("notify characteristic not found")?
-            .clone();
-        let notify_stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>, bluest::Error>> + Send + Unpin>> = Box::pin(notify_char.notify().await?);
-        let camera = Camera{write_char, notify_stream};
-        Ok(camera)
-    }
 
-    async fn send_packet(&mut self, packet: Packet) -> Result<(), Box<dyn Error>> {
-        let data = packet.pack();
-        println!("SENT: {:x?}", &data);
-        self.write_char.write(&data).await?;
-        Ok(())
-    }
-    
-    async fn receive_packet(&mut self) -> Option<Packet> {
-        while let Some(msg) = self.notify_stream.next().await {
-            let data = &msg.unwrap();
-            println!("RECV: {:x?}", &data);
-            let packet = Packet::unpack(&data);
-            return Some(packet);
+impl Camera {
+    pub async fn new() -> Result<Self, Box<dyn Error>> {
+        let session = bluer::Session::new().await?;
+        let adapter = session.default_adapter().await?;
+        let mut device = None;
+        for address in adapter.device_addresses().await.unwrap() {
+            let dev = adapter.device(address).unwrap();
+            let uuids = dev.uuids().await.unwrap().unwrap();
+            if uuids.contains(&INSTAX_SERVICE_UUID) {
+                device = Some(dev);
+            }
+        };
+        let device = device.expect("Instax camera not found. Pair using bluetooth settings");
+        device.connect().await?;
+        if device.is_connected().await? {
+            println!("Connected to Instax camera");
         }
-        None
-    }
-    
-    async fn receive_data(&mut self) -> Option<Vec<u8>> {
-        let mut data: Vec<u8> = Vec::new();
-        while let Some(msg) = self.notify_stream.next().await {
-            let payload = msg.unwrap();
-            data.extend(&payload);
-            println!("RECV: {:x?}", &payload);
-            if payload.len() == 1 {
-                return Some(data)
+        else {
+            println!("Cannot connect to camera");
+            exit(1);
+        }
+        let mut instax_service = None;
+        let mut write_characteristic = None;
+        let mut notify_characteristic = None;
+        for service in device.services().await.unwrap() {
+            if service.uuid().await? == INSTAX_SERVICE_UUID {
+                instax_service = Some(service);
             }
         }
-        None
+        let instax_service = instax_service.expect("Instax BLE service not found");
+        for characteristic in instax_service.characteristics().await.unwrap() {
+            match characteristic.uuid().await? {
+                INSTAX_WRITE_UUID => { write_characteristic = Some(characteristic); }
+                INSTAX_NOTIFY_UUID => { notify_characteristic = Some(characteristic); }
+                _ => {}
+            };
+        }
+        let write_characteristic = write_characteristic.unwrap();
+        let notify_characteristic = notify_characteristic.unwrap();
+        let notify_stream: Pin<Box<dyn Stream<Item = Vec<u8>>>> = Box::pin(notify_characteristic.notify().await?);
+        Ok(Self{write_characteristic, notify_stream})
+    }
+
+    pub async fn send_data(&self, data: Vec<u8>) -> Result<(), Box<dyn Error>> {
+        println!("SENT: {:x?}", &data);
+        self.write_characteristic.write(&data).await?;
+        Ok(())
+    }
+
+    pub async fn receive_data(&mut self) -> Option<Vec<u8>> {
+        match self.notify_stream.next().await {
+            Some(data) => {
+                println!("RECV: {:x?}", &data);
+                Some(data)
+            }
+            None => None
+        }
+    }
+
+    pub async fn send_packet(&self, packet: Packet) -> Result<(), Box<dyn Error>> {
+        let data = packet.pack();
+        self.send_data(data).await?;
+        Ok(())
+    }
+
+    pub async fn receive_packet(&mut self) -> Result<Packet, Box<dyn Error>> {
+        let data = self.receive_data().await.unwrap();
+        let packet = Packet::unpack(&data);
+        Ok(packet)
     }
 }
+
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -279,7 +273,7 @@ async fn automatic_photo_download(camera: &mut Camera) {
     }
     println!("Auto upload start");
     let packet = Packet::with_data(SID::IMAGE_AUTO_UPLOAD_START, vec![0;4]);
-    camera.send_packet(packet);
+    camera.send_packet(packet).await.unwrap();
     let response = camera.receive_packet().await.unwrap();
     println!("Auto upload data");
     let num_frames = response.data[3];
@@ -287,7 +281,7 @@ async fn automatic_photo_download(camera: &mut Camera) {
     for frame in 0..50 {
         let frame_num = (frame as u32).to_be_bytes().to_vec();
         let packet = Packet::with_data(SID::IMAGE_AUTO_UPLOAD_DATA, frame_num);
-        camera.send_packet(packet);
+        camera.send_packet(packet).await.unwrap();
         let _data = camera.receive_data().await.unwrap();
         println!("Frame: {}", frame);
         thread::sleep(Duration::from_millis(600));
@@ -301,10 +295,10 @@ async fn live_view_test(camera: &mut Camera) {
     let _response = camera.receive_packet().await.unwrap();
     println!("Live view receive");
     let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
-    camera.send_packet(packet);
+    camera.send_packet(packet).await.unwrap();
     thread::sleep(Duration::from_millis(600));
     let _response = camera.receive_packet().await.unwrap();
     let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
-    camera.send_packet(packet);
+    camera.send_packet(packet).await.unwrap();
     let _data = camera.receive_data().await.unwrap();
 }
