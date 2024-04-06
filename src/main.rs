@@ -1,7 +1,7 @@
 use bluest::{pairing::NoInputOutputPairingAgent, Adapter, Uuid, Characteristic};
 use futures_lite::{StreamExt, Stream};
 use instax_pal::*;
-use std::{error::Error, pin::Pin};
+use std::{error::Error, pin::Pin, marker::PhantomPinned, ptr::NonNull};
 use num_traits::FromPrimitive;
 use std::{thread, time::Duration};
 use chrono::prelude::*;
@@ -113,12 +113,15 @@ impl Packet {
     }
 }
 
+// NOTE: Camera is a self referential structure https://doc.rust-lang.org/std/pin/index.html#a-self-referential-struct
 struct Camera {
     write_char: Characteristic,
-    notify_stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>, bluest::Error>> + Send + Unpin>>,
+    notify_char: Characteristic,
+    notify_stream: NonNull<dyn Stream<Item = Result<Vec<u8>, bluest::Error>> + Send + Unpin>,
+    _pin: PhantomPinned
 }
 impl Camera {
-    async fn new() -> Result<Self, Box<dyn Error>> {
+    async fn new() -> Result<Pin<Box<Self>>, Box<dyn Error>> {
         let adapter = Adapter::default()
             .await
             .ok_or("Bluetooth adapter not found")?;
@@ -151,19 +154,24 @@ impl Camera {
             None => return Err("Service not found".into()),
         };
         let characteristics = service.characteristics().await?;
-        let write_char = characteristics
-            .iter()
-            .find(|x| x.uuid() == INSTAX_WRITE_UUID)
-            .ok_or("write characteristic not found")?
-            .clone();
-        let notify_char = characteristics
-            .iter()
-            .find(|x| x.uuid()  == INSTAX_NOTIFY_UUID)
-            .ok_or("notify characteristic not found")?
-            .clone();
-        let notify_stream: Pin<Box<dyn Stream<Item = Result<Vec<u8>, bluest::Error>> + Send + Unpin>> = Box::pin(notify_char.notify().await?);
-        let camera = Camera{write_char, notify_stream};
-        Ok(camera)
+        let camera = Camera {
+            write_char: characteristics
+                .iter()
+                .find(|x| x.uuid() == INSTAX_WRITE_UUID)
+                .ok_or("write characteristic not found")?
+                .clone(),
+            notify_char: characteristics
+                .iter()
+                .find(|x| x.uuid()  == INSTAX_NOTIFY_UUID)
+                .ok_or("notify characteristic not found")?
+                .clone(),
+            notify_stream: NonNull::<dyn Stream<Item = Result<Vec<u8>, bluest::Error>> + Send + Unpin>::dangling(),
+            _pin: PhantomPinned,
+        };
+        let mut boxed = Box::new(camera);
+        boxed.notify_stream = NonNull::from(&camera.notify_char.notify().await?);
+        let pin = Box::into_pin(boxed);
+        Ok(pin)
     }
 
     async fn send_packet(&mut self, packet: Packet) -> Result<(), Box<dyn Error>> {
