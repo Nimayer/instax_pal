@@ -173,32 +173,21 @@ impl Camera {
     }
 
     pub async fn receive_data(&mut self) -> Option<Vec<u8>> {
-        match self.notify_stream.next().await {
-            Some(data) => {
-                println!("RECV: {:x?}", &data);
-                Some(data)
-            }
-            None => {
-                println!("No more data");
-                None
-            }
-        }
+        let data = self.notify_stream.next().await?;
+        println!("RECV: {:x?}", &data);
+        Some(data)
     }
 
     pub async fn send_packet(&self, packet: Packet) -> Result<(), Box<dyn Error>> {
         let data = packet.pack();
-        self.send_data(data).await?;
-        Ok(())
+        self.send_data(data).await
     }
 
-    pub async fn receive_packet(&mut self) -> Result<Packet, Box<dyn Error>> {
-        let data = self.receive_data().await.unwrap();
-        let packet = Packet::unpack(&data);
-        Ok(packet)
+    pub async fn receive_packet(&mut self) -> Option<Packet> {
+        let data = self.receive_data().await?;
+        Some(Packet::unpack(&data))
     }
 }
-
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -213,18 +202,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
     support_function_info(&mut camera, SupportFunctionInfoType::CAMERA_HISTORY_INFO).await;
     //automatic_photo_download(&mut camera).await;
     live_view_test(&mut camera).await;
+    keepalive(&mut camera).await;
     Ok(())
 }
 
-async fn support_function_version_info(camera: &mut Camera) {
-    let packet = Packet::with_sid(SID::SUPPORT_FUNCTION_AND_VERSION_INFO);
-    camera.send_packet(packet).await.unwrap();
-    let response = camera.receive_packet().await.unwrap();
-    let info = SupportFunctionVersionInfo::from_bytes(&response.data);
-    dbg!(info);
+async fn keepalive(camera: &mut Camera) {
+    loop {
+        let _ = camera.send_packet(Packet::with_type(SID::SUPPORT_FUNCTION_INFO, SupportFunctionInfoType::CAMERA_FUNCTION_INFO as u8)).await;
+        let _ = camera.receive_packet().await;
+        thread::sleep(Duration::from_secs(4));
+        let _ = camera.send_packet(Packet::with_type(SID::SUPPORT_FUNCTION_INFO, SupportFunctionInfoType::CAMERA_HISTORY_INFO as u8)).await;
+        let _ = camera.receive_packet().await;
+        thread::sleep(Duration::from_secs(4));
+        let _ = camera.send_packet(Packet::with_type(SID::SUPPORT_FUNCTION_INFO, SupportFunctionInfoType::CAMERA_FUNCTION_INFO as u8)).await;
+        let _ = camera.receive_packet().await;
+        thread::sleep(Duration::from_secs(4));
+    }
 }
 
-async fn support_function_info(camera: &mut Camera, info_type: SupportFunctionInfoType) {
+async fn support_function_version_info(camera: &mut Camera) -> Option<SupportFunctionVersionInfo> {
+    let packet = Packet::with_sid(SID::SUPPORT_FUNCTION_AND_VERSION_INFO);
+    camera.send_packet(packet).await.ok()?;
+    let response = camera.receive_packet().await?;
+    Some(SupportFunctionVersionInfo::from_bytes(&response.data))
+}
+
+async fn support_function_info(camera: &mut Camera, info_type: SupportFunctionInfoType){
     let packet = Packet::with_type(SID::SUPPORT_FUNCTION_INFO, info_type.clone() as u8);
     camera.send_packet(packet).await.unwrap();
     let response = camera.receive_packet().await.unwrap();
@@ -249,26 +252,24 @@ async fn support_function_info(camera: &mut Camera, info_type: SupportFunctionIn
     }
 }
 
-async fn parameter_read(camera: &mut Camera, setting: ReadWriteSettingType) {
+async fn parameter_read(camera: &mut Camera, setting: ReadWriteSettingType) -> Option<ParameterReadWriteResponse> {
     let payload = vec![setting as u8, ReadWriteSettingMode::GET_CURRENT_SETTING as u8, 0x00, 0x00, 0x00, 0x00];
     let packet = Packet::with_data(SID::PARAMETER_RW, payload);
-    camera.send_packet(packet).await.unwrap();
-    let response = camera.receive_packet().await.unwrap();
-    let info = ParameterReadWriteResponse::from_bytes(&response.data);
-    dbg!(info);
+    camera.send_packet(packet).await.ok()?;
+    let response = camera.receive_packet().await?;
+    Some(ParameterReadWriteResponse::from_bytes(&response.data))
 }
 
-async fn set_timedate(camera: &mut Camera) {
+async fn set_timedate(camera: &mut Camera) -> Option<DateTimeResponse> {
     let now = Utc::now();
     let formatted = now.format("%Y%m%d%H%M%S").to_string();
     let mut bytes = formatted.into_bytes();
     let mut payload: Vec<u8> = vec![2];
     payload.append(&mut bytes);
     let packet = Packet::with_data(SID::TIME_SETTING, payload);
-    camera.send_packet(packet).await.unwrap();
-    let response = camera.receive_packet().await.unwrap();
-    let info = DateTimeResponse::from_bytes(&response.data);
-    dbg!(info);
+    camera.send_packet(packet).await.ok()?;
+    let response = camera.receive_packet().await?;
+    Some(DateTimeResponse::from_bytes(&response.data))
 }
 
 async fn automatic_photo_download(camera: &mut Camera) {
@@ -302,19 +303,15 @@ async fn live_view_test(camera: &mut Camera) {
     let packet = Packet::with_type(SID::LIVE_VIEW_START, 0);
     camera.send_packet(packet).await.unwrap();
     let _response = camera.receive_packet().await.unwrap();
-    println!("Live view receive");
-    let packet = Packet::with_sid(SID::LIVE_VIEW_RECEIVE);
-    camera.send_packet(packet).await.unwrap();
+    camera.send_packet(Packet::with_sid(SID::LIVE_VIEW_RECEIVE)).await.unwrap();
     thread::sleep(Duration::from_millis(600));
     let mut photo = Vec::<u8>::new();
-    let mut count: u8 = 0;
-    while let Some(data) = camera.receive_data().await {
-        count += 1;
+    // Receive 3 live-view photo chunks
+    for _ in 0..3 {
+        let data = camera.receive_data().await.unwrap();
         photo.extend(data);
-        if count == 10 {
-            break;
-        }
     };
     let file_path = Path::new("liveview_1.jpg");
     fs::write(file_path, &photo[11..]).unwrap();
+    camera.send_packet(Packet::with_sid(SID::LIVE_VIEW_STOP)).await.unwrap();
 }

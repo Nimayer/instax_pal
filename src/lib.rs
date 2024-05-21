@@ -216,6 +216,15 @@ impl SupportFunctionVersionInfo {
     }
 }
 
+// SUPPORT_FUNCTION_INFO
+
+pub enum SupportFunctionInfoResponse {
+    ImageSupportInfo(ImageSupportInfo),
+    BatteryInfo(BatteryInfo),
+    CameraFunctionInfo(CameraFunctionInfo),
+    CameraHistoryInfo(CameraHistoryInfo),
+}
+
 #[derive(Debug)]
 pub struct ImageSupportInfo {
     pub width: u16,
